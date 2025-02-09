@@ -18,7 +18,12 @@ public class WebSocketConfig implements WebSocketConfigurer {
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
         registry.addHandler(new GameWebSocketHandler(), "/socket")
                 .addInterceptors(authInterceptor)
-                .setAllowedOrigins("http://localhost:8081")
+                .setAllowedOrigins(
+                        "http://localhost:8081",
+                        "http://localhost:5173",
+                        "https://music-bingo-swart.vercel.app",
+                        "https://www.discohitsbingo.com"
+                )
                 .withSockJS();
     }
 }

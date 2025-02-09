@@ -38,7 +38,7 @@ public class AuthService {
         user.setEmail(request.getEmail());
         user.setPassword(passwordEncoder.encode(request.getPassword()));
         user.setVerificationToken(UUID.randomUUID().toString());
-        user.setEnabled(true); //temporal
+        user.setEnabled(false);
 
         userRepository.save(user);
 
