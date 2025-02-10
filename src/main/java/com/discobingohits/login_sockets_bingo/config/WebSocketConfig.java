@@ -18,6 +18,7 @@ public class WebSocketConfig implements WebSocketConfigurer {
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
         registry.addHandler(gameWebSocketHandler(), "/socket")
+                .addInterceptors(authInterceptor)
                 .setAllowedOrigins(
                         "https://www.discohitsbingo.com",
                         "http://localhost:5173"
