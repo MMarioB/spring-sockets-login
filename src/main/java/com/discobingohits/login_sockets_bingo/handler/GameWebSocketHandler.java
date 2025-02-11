@@ -63,6 +63,8 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
                     String playerName = entry.playerData.get("name").asText();
                     WebSocketSession playerSession = entry.session;
                     String sessionId = playerSession.getId();
+                    String messageId = entry.playerData.has("messageId") ?
+                            entry.playerData.get("messageId").asText() : null;
 
                     Player existingPlayer = findExistingPlayer(room, playerName, sessionId);
                     boolean isReconnecting = false;
@@ -83,6 +85,7 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
                     }
 
                     Map<String, Object> response = new HashMap<>();
+                    response.put("event", "roomJoined");
                     response.put("roomCode", roomCode);
                     response.put("players", room.getPlayers());
                     response.put("config", room.getConfig());
@@ -90,6 +93,9 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
                     response.put("currentCategory", room.getCurrentCategory());
                     response.put("gameState", room.getGameState());
                     response.put("isReconnecting", isReconnecting);
+                    if (messageId != null) {
+                        response.put("messageId", messageId);
+                    }
 
                     playerSession.sendMessage(new TextMessage(objectMapper.writeValueAsString(response)));
 
@@ -103,30 +109,6 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
                     log.error("Error en delay de cola", e);
                 }
             }
-        }
-
-        private void processPlayerJoin(GameRoom room, JsonNode playerData, WebSocketSession session) throws IOException {
-            String playerName = playerData.get("name").asText();
-            Player existingPlayer = findExistingPlayer(room, playerName, session.getId());
-            boolean isReconnecting = false;
-
-            if (existingPlayer != null) {
-                isReconnecting = true;
-                existingPlayer.setId(session.getId());
-                existingPlayer.setReconnected(true);
-                existingPlayer.setReady(room.getPhase().equals("playing"));
-            } else {
-                room.getPlayers().add(new Player(
-                        session.getId(),
-                        playerName,
-                        false,
-                        false,
-                        new Date()
-                ));
-            }
-
-            sendJoinResponse(room, session, isReconnecting);
-            broadcastPlayersUpdate(room);
         }
     }
 
@@ -144,6 +126,9 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
         JsonNode data = jsonNode.get("data");
 
         switch (event) {
+            case "checkRoom":
+                handleCheckRoom(session, data);
+                break;
             case "createRoom":
                 handleCreateRoom(session, data);
                 break;
@@ -172,6 +157,28 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
                 handleWinner(session, data);
                 break;
         }
+    }
+
+    private void handleCheckRoom(WebSocketSession session, JsonNode data) throws IOException {
+        String roomCode = data.get("roomCode").asText();
+        String messageId = data.has("messageId") ? data.get("messageId").asText() : null;
+        GameRoom room = gameRooms.get(roomCode);
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("event", "roomStatus");
+        response.put("exists", room != null);
+
+        if (messageId != null) {
+            response.put("messageId", messageId);
+        }
+
+        if (room != null) {
+            response.put("phase", room.getPhase());
+            response.put("playerCount", room.getPlayers().size());
+            response.put("maxPlayers", room.getConfig().getMaxPlayers());
+        }
+
+        session.sendMessage(new TextMessage(objectMapper.writeValueAsString(response)));
     }
 
     @Override
@@ -239,9 +246,11 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
         String roomCode = data.has("roomCode") ?
                 data.get("roomCode").asText() :
                 generateRoomCode();
+        String messageId = data.has("messageId") ? data.get("messageId").asText() : null;
 
         GameConfig config = objectMapper.treeToValue(data, GameConfig.class);
         GameRoom room = new GameRoom(session.getId(), config);
+        room.setCode(roomCode);
 
         room.getPlayers().add(new Player(
                 session.getId(),
@@ -253,11 +262,14 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
 
         gameRooms.put(roomCode, room);
 
-        // Enviar respuesta
         Map<String, Object> response = new HashMap<>();
+        response.put("event", "roomCreated");
         response.put("roomCode", roomCode);
         response.put("players", room.getPlayers());
         response.put("config", room.getConfig());
+        if (messageId != null) {
+            response.put("messageId", messageId);
+        }
 
         session.sendMessage(new TextMessage(objectMapper.writeValueAsString(response)));
     }
@@ -268,15 +280,16 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
 
     private void handleJoinRoom(WebSocketSession session, JsonNode data) throws IOException {
         String roomCode = data.get("roomCode").asText();
+        String messageId = data.has("messageId") ? data.get("messageId").asText() : null;
         GameRoom room = gameRooms.get(roomCode);
 
         if (room == null) {
-            sendError(session, "Sala no encontrada");
+            sendError(session, "Sala no encontrada", "ROOM_NOT_FOUND", messageId);
             return;
         }
 
         if (room.getPlayers().size() >= room.getConfig().getMaxPlayers()) {
-            sendError(session, "Sala llena");
+            sendError(session, "Sala llena", "ROOM_FULL", messageId);
             return;
         }
 
@@ -285,27 +298,18 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
 
     private Player findExistingPlayer(GameRoom room, String name, String id) {
         return room.getPlayers().stream()
-                .filter(p -> {
-                    // Solo considera reconexión si coincide EXACTAMENTE el nombre
-                    // y no es el Game Master
-                    return p.getName().equals(name) &&
-                            !p.getName().equals("Game Master");
-                })
+                .filter(p -> p.getName().equals(name) && !p.getName().equals("Game Master"))
                 .findFirst()
                 .orElse(null);
     }
 
-    private void sendError(WebSocketSession session, String message) throws IOException {
-        Map<String, String> error = Map.of("message", message);
-        session.sendMessage(new TextMessage(objectMapper.writeValueAsString(error)));
-    }
-
     private void handlePlayerReady(WebSocketSession session, JsonNode data) throws IOException {
         String roomCode = data.get("roomCode").asText();
+        String messageId = data.has("messageId") ? data.get("messageId").asText() : null;
         GameRoom room = gameRooms.get(roomCode);
 
         if (room == null) {
-            sendError(session, "Sala no encontrada");
+            sendError(session, "Sala no encontrada", "ROOM_NOT_FOUND", messageId);
             return;
         }
 
@@ -316,11 +320,151 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
 
         if (player != null) {
             player.setReady(true);
-            broadcastToRoom(roomCode, Map.of(
-                    "event", "playersUpdate",
-                    "players", room.getPlayers()
-            ));
+            Map<String, Object> response = new HashMap<>();
+            response.put("event", "playersUpdate");
+            response.put("players", room.getPlayers());
+            if (messageId != null) {
+                response.put("messageId", messageId);
+            }
+            broadcastToRoom(roomCode, response);
+        } else {
+            sendError(session, "Jugador no encontrado en la sala", "PLAYER_NOT_FOUND", messageId);
         }
+    }
+
+    private void sendError(WebSocketSession session, String message) throws IOException {
+        sendError(session, message, null, null);
+    }
+
+    private void sendError(WebSocketSession session, String message, String code, String messageId) throws IOException {
+        Map<String, Object> error = new HashMap<>();
+        error.put("event", "error");
+        error.put("message", message);
+        if (code != null) {
+            error.put("code", code);
+        }
+        if (messageId != null) {
+            error.put("messageId", messageId);
+        }
+        session.sendMessage(new TextMessage(objectMapper.writeValueAsString(error)));
+    }
+
+    private void handleStartGame(WebSocketSession session, JsonNode data) throws IOException {
+        String roomCode = data.get("roomCode").asText();
+        String difficulty = data.get("difficulty").asText();
+        String messageId = data.has("messageId") ? data.get("messageId").asText() : null;
+        GameRoom room = gameRooms.get(roomCode);
+
+        if (room == null || !session.getId().equals(room.getHost())) {
+            sendError(session, "No autorizado", "UNAUTHORIZED", messageId);
+            return;
+        }
+
+        if (!room.getPlayers().stream().allMatch(p -> p.isHost() || p.isReady())) {
+            sendError(session, "No todos los jugadores están listos", "PLAYERS_NOT_READY", messageId);
+            return;
+        }
+
+        room.setPhase("playing");
+        room.getConfig().setDifficulty(difficulty);
+        room.setGameState(new GameState(difficulty, new Date(), 0));
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("event", "gameStarted");
+        response.put("difficulty", difficulty);
+        response.put("players", room.getPlayers());
+        response.put("gameState", room.getGameState());
+        if (messageId != null) {
+            response.put("messageId", messageId);
+        }
+
+        broadcastToRoom(roomCode, response);
+    }
+
+    private void handleSelectCategory(WebSocketSession session, JsonNode data) throws IOException {
+        String roomCode = data.get("roomCode").asText();
+        JsonNode categoryNode = data.get("category");
+        String messageId = data.has("messageId") ? data.get("messageId").asText() : null;
+        GameRoom room = gameRooms.get(roomCode);
+
+        if (room == null || !session.getId().equals(room.getHost())) {
+            sendError(session, "No autorizado", "UNAUTHORIZED", messageId);
+            return;
+        }
+
+        room.setCurrentCategory(categoryNode.toString());
+        room.setPhase("category");
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("event", "categorySelected");
+        response.put("category", categoryNode);
+        if (messageId != null) {
+            response.put("messageId", messageId);
+        }
+
+        broadcastToRoom(roomCode, response);
+    }
+
+    private void handleRevealSong(WebSocketSession session, JsonNode data) throws IOException {
+        String roomCode = data.get("roomCode").asText();
+        JsonNode songData = data.get("songData");
+        String messageId = data.has("messageId") ? data.get("messageId").asText() : null;
+        GameRoom room = gameRooms.get(roomCode);
+
+        if (room == null || !session.getId().equals(room.getHost())) {
+            sendError(session, "No autorizado", "UNAUTHORIZED", messageId);
+            return;
+        }
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("event", "songRevealed");
+        response.put("songData", songData);
+        if (messageId != null) {
+            response.put("messageId", messageId);
+        }
+
+        broadcastToRoom(roomCode, response);
+    }
+
+    private void handleMarkingChange(WebSocketSession session, JsonNode data, boolean enable) throws IOException {
+        String roomCode = data.get("roomCode").asText();
+        String messageId = data.has("messageId") ? data.get("messageId").asText() : null;
+        GameRoom room = gameRooms.get(roomCode);
+
+        if (room == null || !session.getId().equals(room.getHost())) {
+            sendError(session, "No autorizado", "UNAUTHORIZED", messageId);
+            return;
+        }
+
+        room.setPhase(enable ? "marking" : "waiting");
+        Map<String, Object> response = new HashMap<>();
+        response.put("event", enable ? "markingEnabled" : "markingDisabled");
+        if (messageId != null) {
+            response.put("messageId", messageId);
+        }
+
+        broadcastToRoom(roomCode, response);
+    }
+
+    private void handleWinner(WebSocketSession session, JsonNode data) throws IOException {
+        String roomCode = data.get("roomCode").asText();
+        String playerName = data.get("playerName").asText();
+        String messageId = data.has("messageId") ? data.get("messageId").asText() : null;
+        GameRoom room = gameRooms.get(roomCode);
+
+        if (room == null) {
+            sendError(session, "Sala no encontrada", "ROOM_NOT_FOUND", messageId);
+            return;
+        }
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("event", "gameWinner");
+        response.put("playerName", playerName);
+        if (messageId != null) {
+            response.put("messageId", messageId);
+        }
+
+        broadcastToRoom(roomCode, response);
     }
 
     private void broadcastToRoom(String roomCode, Map<String, Object> message) throws IOException {
@@ -334,118 +478,5 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
                 }
             }
         }
-    }
-
-    private void handleStartGame(WebSocketSession session, JsonNode data) throws IOException {
-        String roomCode = data.get("roomCode").asText();
-        String difficulty = data.get("difficulty").asText();
-        GameRoom room = gameRooms.get(roomCode);
-
-        if (room == null || !session.getId().equals(room.getHost())) {
-            sendError(session, "No autorizado");
-            return;
-        }
-
-        if (!room.getPlayers().stream().allMatch(p -> p.isHost() || p.isReady())) {
-            sendError(session, "No todos los jugadores están listos");
-            return;
-        }
-
-        room.setPhase("playing");
-        room.getConfig().setDifficulty(difficulty);
-        room.setGameState(new GameState(difficulty, new Date(), 0));
-
-        broadcastToRoom(roomCode, Map.of(
-                "event", "gameStarted",
-                "difficulty", difficulty,
-                "players", room.getPlayers(),
-                "gameState", room.getGameState()
-        ));
-    }
-
-    private void handleSelectCategory(WebSocketSession session, JsonNode data) throws IOException {
-        String roomCode = data.get("roomCode").asText();
-        String category = data.get("category").asText();
-        GameRoom room = gameRooms.get(roomCode);
-
-        if (room == null || !session.getId().equals(room.getHost())) {
-            sendError(session, "No autorizado");
-            return;
-        }
-
-        room.setCurrentCategory(category);
-        room.setPhase("category");
-
-        broadcastToRoom(roomCode, Map.of(
-                "event", "categorySelected",
-                "category", category
-        ));
-    }
-
-    private void handleRevealSong(WebSocketSession session, JsonNode data) throws IOException {
-        String roomCode = data.get("roomCode").asText();
-        JsonNode songData = data.get("songData");
-        GameRoom room = gameRooms.get(roomCode);
-
-        if (room == null || !session.getId().equals(room.getHost())) {
-            sendError(session, "No autorizado");
-            return;
-        }
-
-        broadcastToRoom(roomCode, Map.of(
-                "event", "songRevealed",
-                "songData", songData
-        ));
-    }
-
-    private void handleMarkingChange(WebSocketSession session, JsonNode data, boolean enable) throws IOException {
-        String roomCode = data.get("roomCode").asText();
-        GameRoom room = gameRooms.get(roomCode);
-
-        if (room == null || !session.getId().equals(room.getHost())) {
-            sendError(session, "No autorizado");
-            return;
-        }
-
-        room.setPhase(enable ? "marking" : "waiting");
-        broadcastToRoom(roomCode, Map.of(
-                "event", enable ? "markingEnabled" : "markingDisabled"
-        ));
-    }
-
-    private void handleWinner(WebSocketSession session, JsonNode data) throws IOException {
-        String roomCode = data.get("roomCode").asText();
-        String playerName = data.get("playerName").asText();
-        GameRoom room = gameRooms.get(roomCode);
-
-        if (room == null) {
-            sendError(session, "Sala no encontrada");
-            return;
-        }
-
-        broadcastToRoom(roomCode, Map.of(
-                "event", "gameWinner",
-                "playerName", playerName
-        ));
-    }
-
-    private void sendJoinResponse(GameRoom room, WebSocketSession session, boolean isReconnecting) throws IOException {
-        Map<String, Object> response = new HashMap<>();
-        response.put("roomCode", room.getCode());
-        response.put("players", room.getPlayers());
-        response.put("config", room.getConfig());
-        response.put("phase", room.getPhase());
-        response.put("currentCategory", room.getCurrentCategory());
-        response.put("gameState", room.getGameState());
-        response.put("isReconnecting", isReconnecting);
-
-        session.sendMessage(new TextMessage(objectMapper.writeValueAsString(response)));
-    }
-
-    private void broadcastPlayersUpdate(GameRoom room) throws IOException {
-        broadcastToRoom(room.getCode(), Map.of(
-                "event", "playersUpdate",
-                "players", room.getPlayers()
-        ));
     }
 }
