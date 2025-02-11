@@ -243,10 +243,8 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
     }
 
     private void handleCreateRoom(WebSocketSession session, JsonNode data) throws IOException {
-        String roomCode = data.has("roomCode") ?
-                data.get("roomCode").asText() :
-                generateRoomCode();
         String messageId = data.has("messageId") ? data.get("messageId").asText() : null;
+        JsonNode configNode = data.has("config") ? data.get("config") : data;
 
         try {
             // Verificar si el host ya tiene una sala
@@ -260,8 +258,13 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
                 log.info("Sala anterior {} eliminada para host {}", entry.getKey(), session.getId());
             });
 
+            // Obtener código de sala
+            String roomCode = configNode.has("roomCode") ?
+                    configNode.get("roomCode").asText() :
+                    generateRoomCode();
+
             // Crear nueva sala
-            GameConfig config = objectMapper.treeToValue(data, GameConfig.class);
+            GameConfig config = objectMapper.treeToValue(configNode, GameConfig.class);
             GameRoom room = new GameRoom(session.getId(), config);
             room.setCode(roomCode);
 
