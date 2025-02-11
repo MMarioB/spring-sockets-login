@@ -248,30 +248,48 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
                 generateRoomCode();
         String messageId = data.has("messageId") ? data.get("messageId").asText() : null;
 
-        GameConfig config = objectMapper.treeToValue(data, GameConfig.class);
-        GameRoom room = new GameRoom(session.getId(), config);
-        room.setCode(roomCode);
+        try {
+            // Verificar si el host ya tiene una sala
+            Optional<Map.Entry<String, GameRoom>> existingRoom = gameRooms.entrySet().stream()
+                    .filter(entry -> entry.getValue().getHost().equals(session.getId()))
+                    .findFirst();
 
-        room.getPlayers().add(new Player(
-                session.getId(),
-                "Game Master",
-                true,
-                true,
-                new Date()
-        ));
+            // Si existe una sala, la eliminamos
+            existingRoom.ifPresent(entry -> {
+                gameRooms.remove(entry.getKey());
+                log.info("Sala anterior {} eliminada para host {}", entry.getKey(), session.getId());
+            });
 
-        gameRooms.put(roomCode, room);
+            // Crear nueva sala
+            GameConfig config = objectMapper.treeToValue(data, GameConfig.class);
+            GameRoom room = new GameRoom(session.getId(), config);
+            room.setCode(roomCode);
 
-        Map<String, Object> response = new HashMap<>();
-        response.put("event", "roomCreated");
-        response.put("roomCode", roomCode);
-        response.put("players", room.getPlayers());
-        response.put("config", room.getConfig());
-        if (messageId != null) {
-            response.put("messageId", messageId);
+            room.getPlayers().add(new Player(
+                    session.getId(),
+                    "Game Master",
+                    true,
+                    true,
+                    new Date()
+            ));
+
+            gameRooms.put(roomCode, room);
+            log.info("Nueva sala creada: {}", roomCode);
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("event", "roomCreated");
+            response.put("roomCode", roomCode);
+            response.put("players", room.getPlayers());
+            response.put("config", room.getConfig());
+            if (messageId != null) {
+                response.put("messageId", messageId);
+            }
+
+            session.sendMessage(new TextMessage(objectMapper.writeValueAsString(response)));
+        } catch (Exception e) {
+            log.error("Error al crear sala: {}", e.getMessage());
+            sendError(session, "Error al crear sala: " + e.getMessage(), "ROOM_CREATION_ERROR", messageId);
         }
-
-        session.sendMessage(new TextMessage(objectMapper.writeValueAsString(response)));
     }
 
     private String generateRoomCode() {
