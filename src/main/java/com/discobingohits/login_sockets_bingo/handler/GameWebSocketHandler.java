@@ -381,10 +381,8 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
             return;
         }
 
-        if (!room.getPlayers().stream().allMatch(p -> p.isHost() || p.isReady())) {
-            sendError(session, "No todos los jugadores están listos", "PLAYERS_NOT_READY", messageId);
-            return;
-        }
+        // Asegurarse de que todos los jugadores mantengan su estado ready
+        room.getPlayers().forEach(player -> player.setReady(true));
 
         room.setPhase("playing");
         room.getConfig().setDifficulty(difficulty);
