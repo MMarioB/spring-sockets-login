@@ -14,6 +14,7 @@ public class Player {
     private boolean ready;
     private Date joinedAt;
     private boolean reconnected;
+    private String phase;
 
     public Player(String id, String name, boolean isHost, boolean ready, Date joinedAt) {
         this.id = id;
@@ -21,5 +22,6 @@ public class Player {
         this.isHost = isHost;
         this.ready = ready;
         this.joinedAt = joinedAt;
+        this.phase = "waiting";
     }
 }

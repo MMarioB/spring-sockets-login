@@ -382,7 +382,10 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
         }
 
         // Asegurarse de que todos los jugadores mantengan su estado ready
-        room.getPlayers().forEach(player -> player.setReady(true));
+        room.getPlayers().forEach(player -> {
+            player.setReady(true);
+            player.setPhase("playing");
+        });
 
         room.setPhase("playing");
         room.getConfig().setDifficulty(difficulty);
@@ -393,6 +396,7 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
         response.put("difficulty", difficulty);
         response.put("players", room.getPlayers());
         response.put("gameState", room.getGameState());
+        response.put("phase", "playing");
         if (messageId != null) {
             response.put("messageId", messageId);
         }
